@@ -1,361 +1,225 @@
-#include <stdio.h>
+/* TCPftp.c - main, sendCmd, pasivo */
+
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <ctype.h>
+#include <stdio.h>
+#include <errno.h>
+#include <netdb.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <arpa/inet.h>
 #include <netinet/in.h>
-#include <netdb.h>
-#include <sys/wait.h>
-#include <fcntl.h>
-#include <errno.h>
+#include <arpa/inet.h>
 
-#include "connectsock.h"
-#include "errexit.h"
+extern int  errno;
 
-#define BUFSIZE 8192
+int  errexit(const char *format, ...);
+int  connectTCP(const char *host, const char *service);
+int  passiveTCP(const char *service, int qlen);
 
-/* send a line to socket */
-ssize_t sendline(int fd, const char *s) {
-    size_t len = strlen(s);
-    return send(fd, s, len, 0);
+#define  LINELEN    128
+
+/* Envia cmds FTP al servidor, recibe respuestas y las despliega */
+void sendCmd(int s, char *cmd, char *res) {
+  int n;
+
+  n = strlen(cmd);
+  cmd[n] = '\r';		/* formatear cmd FTP: \r\n al final */
+  cmd[n+1] = '\n';
+  n = write(s, cmd, n+2);	/* envia cmd por canal de control */
+  n = read (s, res, LINELEN);	/* lee respuesta del svr */
+  res[n] = '\0';		/* despliega respuesta */
+  printf ("%s\n", res);
 }
 
-/* receive a single reply line (blocking) */
-int recv_reply(int control_fd, char *buf, size_t buflen) {
-    ssize_t n = recv(control_fd, buf, buflen-1, 0);
-    if (n <= 0) return -1;
-    buf[n] = '\0';
-    return 0;
+/* envia cmd PASV; recibe IP,pto del SVR; se conecta al SVR y retorna sock conectado */
+int pasivo (int s){
+  int sdata;			/* socket para conexion de datos */
+  int nport;			/* puerto (en numeros) en SVR */
+  char cmd[128], res[128], *p;  /* comando y respuesta FTP */
+  char host[64], port[8];	/* host y port del SVR (como strings) */
+  int h1,h2,h3,h4,p1,p2;	/* octetos de IP y puerto del SVR */
+
+  sprintf (cmd, "PASV");
+  sendCmd(s, cmd, res);
+  p = strchr(res, '(');
+  sscanf(p+1, "%d,%d,%d,%d,%d,%d", &h1,&h2,&h3,&h4,&p1,&p2);
+  snprintf(host, 64, "%d.%d.%d.%d", h1,h2,h3,h4);
+  nport = p1*256 + p2;
+  snprintf(port, 8, "%d", nport);
+  sdata = connectTCP(host, port);
+
+  return sdata;
 }
 
-/* read full reply possibly multi-line; returns numeric code in buf_code */
-int read_response(int ctrl, char *out, int outlen) {
-    char buf[1024];
-    if (recv_reply(ctrl, buf, sizeof buf) < 0) return -1;
-    /* Many servers send complete reply in one recv, this is a simple approach */
-    strncpy(out, buf, outlen-1);
-    out[outlen-1] = '\0';
-    return 0;
+void ayuda () {
+  printf ("Cliente FTP. Comandos disponibles:\n \
+    help		- despliega este texto\n \
+    dir		- lista el directorio actual del servidor\n \
+    get <archivo>	- copia el archivo desde el servidor al cliente\n \
+    put <file>		- copia el archivo desde el cliente al servidor\n \
+    pput <file>	- copia el archivo desde el cliente al servidor, con PORT\n \
+    cd <dir>		- cambia al directorio dir en el servidor\n \
+    quit		- finaliza la sesion FTP\n\n");
 }
 
-/* parse PASV reply like: 227 Entering Passive Mode (h1,h2,h3,h4,p1,p2). */
-int parse_pasv_response(const char *resp, char *ip, int *port) {
-    const char *p = strchr(resp, '(');
-    if (!p) return -1;
-    int h1,h2,h3,h4,p1,p2;
-    if (sscanf(p+1, "%d,%d,%d,%d,%d,%d", &h1,&h2,&h3,&h4,&p1,&p2) < 6) return -1;
-    sprintf(ip, "%d.%d.%d.%d", h1,h2,h3,h4);
-    *port = p1*256 + p2;
-    return 0;
+void salir (char *msg) {
+  printf ("%s\n", msg);
+  exit (1);
 }
 
-/* open data connection in PASV mode */
-int open_pasv_data_conn(int ctrl_fd, char *server_host) {
-    char cmd[] = "PASV\r\n";
-    char resp[1024];
-    sendline(ctrl_fd, cmd);
-    if (read_response(ctrl_fd, resp, sizeof resp) < 0) return -1;
-    /* expecting 227 */
-    if (strncmp(resp, "227", 3) != 0) {
-        fprintf(stderr, "PASV failed: %s\n", resp);
-        return -1;
-    }
-    char ip[64];
-    int port;
-    if (parse_pasv_response(resp, ip, &port) < 0) {
-        fprintf(stderr, "Could not parse PASV response: %s\n", resp);
-        return -1;
-    }
-    /* connect to ip:port */
-    char portstr[16];
-    snprintf(portstr, sizeof portstr, "%d", port);
-    int datafd = connectTCP(ip, portstr);
-    if (datafd < 0) {
-        perror("connect data");
-        return -1;
-    }
-    return datafd;
-}
+int main(int argc, char *argv[]) {
+  char  *host = "localhost";  /* host to use if none supplied  */
+  char  *service = "ftp";     /* default service name    */
+  char  cmd[128], res[128];   /* resfer for cmds and replys from svr */
+  char  data[LINELEN+1];      /* resfer to receive dirs (LIST) and send/recv files */
+  char  hdata[64], pdata[8], user[32], *pass, prompt[64], *ucmd, *arg;
+  int   s, s1=0, sdata, n;           /* socket descriptors, read count*/
+  FILE  *fp;
+  struct  sockaddr_in addrSvr;
+  unsigned int alen;
 
-/* open data connection in active (PORT) mode:
-   create a listening socket, send PORT h1,h2,h3,h4,p1,p2, then accept */
-int open_port_active(int ctrl_fd, int *out_listen_fd) {
-    int listenfd;
-    struct sockaddr_in serv;
-    socklen_t len = sizeof(serv);
+  switch (argc) {
+  case 1:
+    host = "localhost";
+    break;
+  case 3:
+    service = argv[2];
+    /* FALL THROUGH */
+  case 2:
+    host = argv[1];
+    break;
+  default:
+    fprintf(stderr, "Uso: TCPftp [host [port]]\n");
+    exit(1);
+  }
 
-    listenfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (listenfd < 0) { perror("socket"); return -1; }
+  s = connectTCP(host, service);
 
-    memset(&serv, 0, sizeof serv);
-    serv.sin_family = AF_INET;
-    serv.sin_addr.s_addr = htonl(INADDR_ANY);
-    serv.sin_port = 0; // ephemeral
+  n = read (s, res, LINELEN);		/* lee msg del SVR, despues de conexion */
+  res[n] = '\0';
+  printf ("%s\n", res);
 
-    if (bind(listenfd, (struct sockaddr*)&serv, sizeof serv) < 0) {
-        perror("bind"); close(listenfd); return -1;
-    }
+  while (1) {
+    printf ("Please enter your username: ");
+    scanf ("%s", user);
+    sprintf (cmd, "USER %s", user); 
+    sendCmd(s, cmd, res);
+  
+    //scanf ("%s", user);
+    pass = getpass("Enter your password: ");
+    sprintf (cmd, "PASS %s", pass); 
+    sendCmd(s, cmd, res);
+    if ((res[0]-'0')*100 + (res[1]-'0')*10 + (res[2]-'0') == 230) break;
+  }
 
-    if (listen(listenfd, 1) < 0) { perror("listen"); close(listenfd); return -1; }
+  fgets (prompt, sizeof(prompt), stdin);
+  ayuda();
 
-    // get bound port
-    if (getsockname(listenfd, (struct sockaddr*)&serv, &len) < 0) {
-        perror("getsockname"); close(listenfd); return -1;
-    }
-    int port = ntohs(serv.sin_port);
+  while (1) {
+    printf ("ftp> ");
+    if (fgets(prompt, sizeof(prompt), stdin) != NULL) {
+      prompt[strcspn(prompt, "\n")] = 0;
 
-    // determine local IP to send in PORT command
-    char hostbuf[256];
-    if (gethostname(hostbuf, sizeof hostbuf) < 0) {
-        perror("gethostname");
-        close(listenfd); return -1;
-    }
-    struct hostent *hent = gethostbyname(hostbuf);
-    if (!hent) {
-        perror("gethostbyname");
-        close(listenfd); return -1;
-    }
-    unsigned char *ip = (unsigned char*)hent->h_addr_list[0];
-
-    int p1 = port / 256;
-    int p2 = port % 256;
-    char portcmd[128];
-    snprintf(portcmd, sizeof portcmd, "PORT %u,%u,%u,%u,%d,%d\r\n",
-             ip[0], ip[1], ip[2], ip[3], p1, p2);
-    sendline(ctrl_fd, portcmd);
-    char resp[1024];
-    if (read_response(ctrl_fd, resp, sizeof resp) < 0) {
-        close(listenfd); return -1;
-    }
-    if (strncmp(resp, "200", 3) != 0) {
-        fprintf(stderr, "PORT failed: %s\n", resp);
-        close(listenfd); return -1;
-    }
-    *out_listen_fd = listenfd;
-    return 0;
-}
-
-/* perform RETR in child: download remote->local */
-void do_retr(int ctrl_fd, const char *remote, const char *local, int use_pasv) {
-    int datafd = -1;
-    int listenfd = -1;
-
-    if (use_pasv) {
-        datafd = open_pasv_data_conn(ctrl_fd, NULL);
-        if (datafd < 0) {
-            fprintf(stderr, "PASV data connection failed\n");
-            exit(1);
+      ucmd = strtok (prompt, " ");
+  
+      if (strcmp(ucmd, "dir") == 0) {
+        sdata = pasivo(s);
+        sprintf (cmd, "LIST"); 
+        sendCmd(s, cmd, res);
+        while ((n = recv(sdata, data, LINELEN, 0)) > 0) {
+          fwrite(data, 1, n, stdout);
         }
-    } else {
-        if (open_port_active(ctrl_fd, &listenfd) < 0) {
-            fprintf(stderr, "PORT setup failed\n");
-            exit(1);
+        close(sdata);
+        n = read (s, res, LINELEN);
+        res[n] = '\0';
+        printf ("%s\n", res);
+
+      } else if (strcmp(ucmd, "get") == 0) {
+  	arg = strtok (NULL, " ");
+        sdata = pasivo(s);
+        sprintf (cmd, "RETR %s", arg); 
+        sendCmd(s, cmd, res);
+        if ((res[0]-'0')*100 + (res[1]-'0')*10 + (res[2]-'0') > 500) continue;
+        fp = fopen(arg, "wb");
+        while ((n = recv(sdata, data, LINELEN, 0)) > 0) {
+          fwrite(data, 1, n, fp);
         }
-    }
+        fclose(fp);
+        close(sdata);
+        n = read (s, res, LINELEN);
+        res[n] = '\0';
+        printf ("%s\n", res);
+  
+      } else if (strcmp(ucmd, "put") == 0) {
+  	arg = strtok (NULL, " ");
+        fp = fopen(arg, "r");
+	if (fp == NULL) {perror ("Open local file"); continue;}
+        sdata = pasivo(s);
+        sprintf (cmd, "STOR %s", arg);
+        sendCmd(s, cmd, res);
 
-    char cmd[512];
-    snprintf(cmd, sizeof cmd, "RETR %s\r\n", remote);
-    sendline(ctrl_fd, cmd);
-
-    char resp[1024];
-    if (read_response(ctrl_fd, resp, sizeof resp) < 0) {
-        fprintf(stderr, "No response to RETR\n");
-        exit(1);
-    }
-    if (strncmp(resp, "150", 3) != 0 && strncmp(resp, "125", 3) != 0) {
-        fprintf(stderr, "Server refused RETR: %s\n", resp);
-        if (listenfd >= 0) close(listenfd);
-        exit(1);
-    }
-
-    if (!use_pasv) {
-        struct sockaddr_in cli;
-        socklen_t len = sizeof cli;
-        datafd = accept(listenfd, (struct sockaddr*)&cli, &len);
-        close(listenfd);
-        if (datafd < 0) { perror("accept"); exit(1); }
-    }
-
-    int fd = open(local, O_CREAT | O_WRONLY | O_TRUNC, 0666);
-    if (fd < 0) { perror("open local file"); close(datafd); exit(1); }
-
-    ssize_t n;
-    char buf[BUFSIZE];
-    while ((n = recv(datafd, buf, sizeof buf, 0)) > 0) {
-        if (write(fd, buf, n) != n) {
-            perror("write");
-            break;
+        while ((n = fread (data, 1, 64, fp)) > 0) {
+          send (sdata, data, n, 0);
         }
-    }
-    close(fd); close(datafd);
+        fclose(fp);
+        close(sdata);
+        n = read (s, res, LINELEN);
+        res[n] = '\0';
+        printf ("%s\n", res);
 
-    /* read final response */
-    if (read_response(ctrl_fd, resp, sizeof resp) == 0) {
-        // print final status
-        fprintf(stderr, "RETR finished: %s", resp);
+      } else if (strcmp(ucmd, "pput") == 0) {
+  	arg = strtok (NULL, " ");
+        fp = fopen(arg, "r");
+	if (fp == NULL) {perror ("Open local file"); continue;}
+       
+	char *ip;
+	if (s1==0) {
+	   s1 = passiveTCP ("1030", 5);
+	   char lname[64];
+	   gethostname(lname, 64);
+	   struct hostent *hent = gethostbyname (lname);
+           ip = inet_ntoa(*((struct in_addr*) hent->h_addr_list[0]));
+	   for(int i = 0; i <= strlen(ip); i++) {
+             if(ip[i] == '.') {
+               ip[i] = ',';
+             }
+           }
+	}
+        sprintf (cmd, "PORT %s,%s", ip,"4,6");
+        sendCmd(s, cmd, res);
+        
+        sprintf (cmd, "STOR %s", arg); 
+        sendCmd(s, cmd, res);
+        sdata = accept(s1, (struct sockaddr *)&addrSvr, &alen);
+        fp = fopen(arg, "r");
+	if (fp == NULL) {perror ("fopen"); exit (1);}
+        while ((n = fread (data, 1, LINELEN, fp)) > 0) {
+          send (sdata, data, n, 0);
+        }
+        fclose(fp);
+        close(sdata);
+        n = read (s, res, LINELEN);
+        res[n] = '\0';
+        printf ("%s\n", res);
+
+      } else if (strcmp(ucmd, "cd") == 0) {
+  	arg = strtok (NULL, " ");
+        sprintf (cmd, "CWD %s", arg); 
+        sendCmd(s, cmd, res);
+
+      } else if (strcmp(ucmd, "quit") == 0) {
+        sprintf (cmd, "QUIT"); 
+        sendCmd(s, cmd, res);
+	exit (0);
+
+      } else if (strcmp(ucmd, "help") == 0) {
+	ayuda();
+
+      } else {
+        printf("%s: comando no implementado.\n", ucmd);
+      }
     }
-    exit(0);
+  }
 }
 
-/* perform STOR in child: upload local->remote */
-void do_stor(int ctrl_fd, const char *local, const char *remote, int use_pasv) {
-    int datafd = -1;
-    int listenfd = -1;
-
-    if (use_pasv) {
-        datafd = open_pasv_data_conn(ctrl_fd, NULL);
-        if (datafd < 0) {
-            fprintf(stderr, "PASV data connection failed\n");
-            exit(1);
-        }
-    } else {
-        if (open_port_active(ctrl_fd, &listenfd) < 0) {
-            fprintf(stderr, "PORT setup failed\n");
-            exit(1);
-        }
-    }
-
-    char cmd[512];
-    snprintf(cmd, sizeof cmd, "STOR %s\r\n", remote);
-    sendline(ctrl_fd, cmd);
-
-    char resp[1024];
-    if (read_response(ctrl_fd, resp, sizeof resp) < 0) {
-        fprintf(stderr, "No response to STOR\n");
-        exit(1);
-    }
-    if (strncmp(resp, "150", 3) != 0 && strncmp(resp, "125", 3) != 0) {
-        fprintf(stderr, "Server refused STOR: %s\n", resp);
-        if (listenfd >= 0) close(listenfd);
-        exit(1);
-    }
-
-    if (!use_pasv) {
-        struct sockaddr_in cli;
-        socklen_t len = sizeof cli;
-        datafd = accept(listenfd, (struct sockaddr*)&cli, &len);
-        close(listenfd);
-        if (datafd < 0) { perror("accept"); exit(1); }
-    }
-
-    int fd = open(local, O_RDONLY);
-    if (fd < 0) { perror("open local file"); close(datafd); exit(1); }
-
-    ssize_t n;
-    char buf[BUFSIZE];
-    while ((n = read(fd, buf, sizeof buf)) > 0) {
-        if (send(datafd, buf, n, 0) != n) {
-            perror("send");
-            break;
-        }
-    }
-    close(fd); close(datafd);
-
-    /* read final response */
-    if (read_response(ctrl_fd, resp, sizeof resp) == 0) {
-        fprintf(stderr, "STOR finished: %s", resp);
-    }
-    exit(0);
-}
-
-int main(int argc, char **argv) {
-    if (argc < 3) {
-        fprintf(stderr, "Uso: %s <server> <port>\n", argv[0]);
-        exit(1);
-    }
-    const char *server = argv[1];
-    const char *port = argv[2];
-
-    int ctrl = connectTCP(server, port);
-    if (ctrl < 0) errexit("No se pudo conectar al servidor %s:%s", server, port);
-
-    char buf[1024];
-    if (read_response(ctrl, buf, sizeof buf) == 0)
-        printf("%s", buf); /* welcome */
-
-    int use_pasv = 1; /* default PASV */
-
-    char line[512];
-    while (1) {
-        printf("ftp> ");
-        if (!fgets(line, sizeof line, stdin)) break;
-
-        /* trim newline */
-        line[strcspn(line, "\r\n")] = 0;
-
-        if (strncmp(line, "quit", 4) == 0 || strncmp(line, "exit", 4) == 0) {
-            sendline(ctrl, "QUIT\r\n");
-            if (read_response(ctrl, buf, sizeof buf) == 0) printf("%s", buf);
-            break;
-        } else if (strncmp(line, "user ", 5) == 0) {
-            char cmd[512];
-            snprintf(cmd, sizeof cmd, "USER %s\r\n", line+5);
-            sendline(ctrl, cmd);
-            if (read_response(ctrl, buf, sizeof buf) == 0) printf("%s", buf);
-        } else if (strncmp(line, "pass ", 5) == 0) {
-            char cmd[512];
-            snprintf(cmd, sizeof cmd, "PASS %s\r\n", line+5);
-            sendline(ctrl, cmd);
-            if (read_response(ctrl, buf, sizeof buf) == 0) printf("%s", buf);
-        } else if (strcmp(line, "pasv") == 0) {
-            use_pasv = 1;
-            printf("Modo PASV seleccionado\n");
-        } else if (strcmp(line, "port") == 0) {
-            use_pasv = 0;
-            printf("Modo PORT (activo) seleccionado\n");
-        } else if (strncmp(line, "retr ", 5) == 0) {
-            /* retr remote [local] */
-            char *args = line + 5;
-            char *remote = strtok(args, " ");
-            char *local = strtok(NULL, " ");
-            if (!remote) { fprintf(stderr, "Uso: retr remote [local]\n"); continue; }
-            if (!local) local = remote;
-
-            pid_t pid = fork();
-            if (pid < 0) { perror("fork"); continue; }
-            if (pid == 0) {
-                /* child performs transfer then exits */
-                do_retr(ctrl, remote, local, use_pasv);
-                /* never returns */
-            } else {
-                /* parent: continue (reap finished children) */
-                int status;
-                while (waitpid(-1, &status, WNOHANG) > 0) {}
-                printf("Transferencia RETR iniciada en proceso %d\n", pid);
-            }
-        } else if (strncmp(line, "stor ", 5) == 0) {
-            /* stor local [remote] */
-            char *args = line + 5;
-            char *local = strtok(args, " ");
-            char *remote = strtok(NULL, " ");
-            if (!local) { fprintf(stderr, "Uso: stor local [remote]\n"); continue; }
-            if (!remote) remote = local;
-
-            pid_t pid = fork();
-            if (pid < 0) { perror("fork"); continue; }
-            if (pid == 0) {
-                do_stor(ctrl, local, remote, use_pasv);
-            } else {
-                int status;
-                while (waitpid(-1, &status, WNOHANG) > 0) {}
-                printf("Transferencia STOR iniciada en proceso %d\n", pid);
-            }
-        } else {
-            /* send arbitrary command through control connection */
-            char cmd[600];
-            snprintf(cmd, sizeof cmd, "%s\r\n", line);
-            sendline(ctrl, cmd);
-            if (read_response(ctrl, buf, sizeof buf) == 0) {
-                printf("%s", buf);
-            } else {
-                printf("No response or connection closed\n");
-            }
-        }
-    }
-
-    close(ctrl);
-    return 0;
-}
