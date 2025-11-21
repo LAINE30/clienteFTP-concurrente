@@ -1,5 +1,3 @@
-/* TCPftp.c - main, sendCmd, pasivo */
-
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
@@ -239,9 +237,27 @@ int main(int argc, char *argv[]) {
       }
       /* ---------------- FIN DE LOS COMANDOS CON fork() ---------------- */
 
+            /* ---------------- COMANDOS SIN fork() ---------------- */
+
       else if (strcmp(ucmd, "cd") == 0) {
         arg = strtok (NULL, " ");
         sprintf (cmd, "CWD %s", arg);
+        sendCmd(s, cmd, res);
+
+      } else if (strcmp(ucmd, "pwd") == 0) {   // <--- NUEVO COMANDO PWD
+        sprintf(cmd, "PWD");
+        sendCmd(s, cmd, res);
+
+      } else if (strcmp(ucmd, "mkd") == 0) {   // <--- NUEVO COMANDO MKD
+        arg = strtok(NULL, " ");
+        if (!arg) { printf("Falta nombre de directorio.\n"); continue; }
+        sprintf(cmd, "MKD %s", arg);
+        sendCmd(s, cmd, res);
+
+      } else if (strcmp(ucmd, "dele") == 0) {  // <--- NUEVO COMANDO DELE
+        arg = strtok(NULL, " ");
+        if (!arg) { printf("Falta nombre de archivo.\n"); continue; }
+        sprintf(cmd, "DELE %s", arg);
         sendCmd(s, cmd, res);
 
       } else if (strcmp(ucmd, "quit") == 0) {
@@ -255,6 +271,7 @@ int main(int argc, char *argv[]) {
       } else {
         printf("%s: comando no implementado.\n", ucmd);
       }
+
     }
   }
 }
