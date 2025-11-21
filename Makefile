@@ -1,13 +1,17 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2
 
-all: clienteFTP
+TARGET = CoronadoL-clienteFTP
+SRC = CoronadoL-clienteFTP.c
+OBJ = CoronadoL-clienteFTP.o
 
-clienteFTP: CoronadoL-clienteFTP.o
-	$(CC) $(CFLAGS) -o clienteFTP CoronadoL-clienteFTP.o
+all: $(TARGET)
 
-CoronadoL-clienteFTP.o: CoronadoL-clienteFTP.c
-	$(CC) $(CFLAGS) -c CoronadoL-clienteFTP.c
+$(TARGET): $(OBJ)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJ)
+
+$(OBJ): $(SRC)
+	$(CC) $(CFLAGS) -c $(SRC)
 
 clean:
-	rm -f *.o clienteFTP
+	rm -f *.o $(TARGET)
