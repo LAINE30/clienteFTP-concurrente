@@ -132,7 +132,7 @@ int main(int argc, char *argv[]) {
         }
 
         if (pid == 0) {
-          /* ---------------- PROCESO HIJO ---------------- */
+          // proceso hijo
           
           if (strcmp(ucmd, "dir") == 0) {
 

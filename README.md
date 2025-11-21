@@ -1,21 +1,15 @@
-Aquí tienes un **README completo, limpio y listo para copiar y descargar**.
-No incluye código fuente, solo la documentación detallada del proyecto.
-
----
-
 # **README – Cliente FTP Concurrente**
 
 ## **Descripción general**
 
 Este proyecto implementa un **cliente FTP concurrente en C**, capaz de:
 
-* Mantener **una sola conexión de control** con el servidor FTP.
 * Realizar **múltiples transferencias de archivos simultáneamente** (en ambos sentidos).
 * Crear un **fork() por cada comando de transferencia**:
 
   * El **proceso hijo** realiza el RETR/STOR/LIST.
   * El **padre** continúa atendiendo comandos del usuario.
-* Funcionar tanto en **modo PASV (pasivo)** como **PORT (activo)**.
+* Funcionar en **modo PASV (pasivo)**.
 
 Este cliente permite que el usuario lance varias descargas/cargas a la vez, sin bloquear la interfaz.
 
@@ -25,9 +19,7 @@ Este cliente permite que el usuario lance varias descargas/cargas a la vez, sin 
 
 | Archivo                           | Descripción                              |
 | --------------------------------- | ---------------------------------------- |
-| **clienteFTP.c**                  | Cliente FTP concurrente.                 |
-| **connectsock.c / connectsock.h** | Utilidades para crear sockets TCP.       |
-| **errexit.c**                     | Función auxiliar para manejo de errores. |
+| **CoronadoL-clienteFTP.c**        | Utilidades para crear sockets TCP.       |
 | **Makefile**                      | Compilación del proyecto.                |
 
 ---
@@ -43,7 +35,7 @@ make
 Esto generará:
 
 ```
-./clienteftp
+./CoronadoL-clienteFTP
 ```
 
 ---
@@ -53,13 +45,13 @@ Esto generará:
 Ejemplo:
 
 ```bash
-./clienteftp <servidor> <puerto>
+./CoronadoL-clienteFTP <servidor>
 ```
 
 Ejemplo contra localhost:
 
 ```bash
-./clienteftp 127.0.0.1 21
+./clienteFTP localhost
 ```
 
 ---
@@ -71,8 +63,6 @@ Ejemplo de sesión:
 ```
 ftp> user miusuario
 ftp> pass miclave
-ftp> pasv        # activar modo pasivo (por defecto)
-ftp> port        # activar modo activo
 ftp> retr archivo1.txt
 ftp> retr archivo2.txt
 ftp> stor subir.bin
@@ -88,7 +78,7 @@ Mientras una descarga está en progreso, puedes ejecutar otros comandos sin espe
 
 ## **1. Conexión de control**
 
-* Se abre un socket TCP hacia el puerto 21 del servidor FTP.
+* Se abre un socket TCP hacia el puerto del servidor FTP.
 * Todas las órdenes FTP viajan por aquí.
 
 ## **2. Concurrencia con fork()**
@@ -119,27 +109,10 @@ Esto hace que el cliente sea **verdaderamente concurrente**.
 
 # **Modos de transferencia**
 
-## **PASV (Pasivo — recomendado)**
-
-El servidor abre un puerto y el cliente se conecta a él.
-
-Ideal para:
-
-✔ NAT
-✔ WiFi compartida
-✔ Probar desde WSL hacia Windows
-
-## **PORT (Activo)**
-
-El cliente abre un puerto y el servidor se conecta a él.
-
-⚠ Puede fallar si tienes firewall o NAT estricto.
-
----
 
 # **Configuración del servidor FTP (ejemplo: vsftpd)**
 
-Este proyecto fue probado con **vsftpd 3.x**.
+Este proyecto fue probado con el servido de linux **vsftpd 3.x**.
 
 ## **Instalación en Ubuntu / WSL**
 
@@ -156,7 +129,7 @@ Editar:
 sudo nano /etc/vsftpd.conf
 ```
 
-Recomendación mínima:
+Recomendación mínima en el servidor:
 
 ```
 listen=YES
@@ -168,13 +141,6 @@ dirmessage_enable=YES
 use_localtime=YES
 xferlog_enable=YES
 
-# Para permitir modo PASV
-pasv_enable=YES
-pasv_min_port=40000
-pasv_max_port=40100
-
-# Para permitir modo activo (PORT)
-port_enable=YES
 ```
 
 Reiniciar:
@@ -187,41 +153,22 @@ sudo service vsftpd restart
 
 # **Cómo probar el cliente concurrentemente**
 
-## **Método 1: WSL como servidor, Windows como cliente**
+## **Método 1: WSL como cliente**
 
-En Windows PowerShell:
+En Ubuntu:
 
-```powershell
-ftp localhost
+```
+make
 ```
 
-Luego prueba tu cliente:
+Luego prueba el cliente:
 
 ```bash
-./clienteftp 127.0.0.1 21
+./CoronadoL-clienteFTP localhost
 ```
 
-## **Método 2: Varias transferencias simultáneas**
+No debe bloquear si inicia seción desde otra parte.
 
-En el cliente:
-
-```
-ftp> retr file1.bin
-ftp> retr file2.iso
-ftp> retr file3.tar.gz
-```
-
-No debe bloquear.
-
-Usa `ps` en WSL para ver los hijos:
-
-```bash
-ps -f | grep clienteftp
-```
-
-Debes ver varios procesos en paralelo.
-
----
 
 # **Limitaciones**
 
@@ -233,17 +180,3 @@ Debes ver varios procesos en paralelo.
 * No maneja timeouts sofisticados.
 
 ---
-
-# **Licencia**
-
-Proyecto libre para uso académico.
-
----
-
-# **Contacto**
-
-Si deseas agregar FTPS, threads en lugar de fork(), o soporte completo para IPv6, puedo ayudarte.
-
----
-
-Si quieres, te genero también un **PDF descargable** con este README. Would you like that?
