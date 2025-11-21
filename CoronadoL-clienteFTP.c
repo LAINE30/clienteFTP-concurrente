@@ -119,10 +119,6 @@ int main(int argc, char *argv[]) {
 
       ucmd = strtok (prompt, " ");
 
-      /* ------------------------------------------------------------------ */
-      /* ---   FORKEAMOS SOLO COMANDOS: dir, get, put, pput            --- */
-      /* ------------------------------------------------------------------ */
-
       if (strcmp(ucmd, "dir") == 0 ||
           strcmp(ucmd, "get") == 0 ||
           strcmp(ucmd, "put") == 0 ||
@@ -230,31 +226,29 @@ int main(int argc, char *argv[]) {
           }
 
         } else {
-          /* ---------------- PADRE ---------------- */
+          //Regresa al proceso padres
           printf("→ Transferencia iniciada en proceso %d\n", pid);
           continue; // vuelve al prompt sin bloquearse
         }
       }
-      /* ---------------- FIN DE LOS COMANDOS CON fork() ---------------- */
-
-            /* ---------------- COMANDOS SIN fork() ---------------- */
-
+      
+      //Se agregan los nuevos comandos opcionales
       else if (strcmp(ucmd, "cd") == 0) {
         arg = strtok (NULL, " ");
         sprintf (cmd, "CWD %s", arg);
         sendCmd(s, cmd, res);
 
-      } else if (strcmp(ucmd, "pwd") == 0) {   // <--- NUEVO COMANDO PWD
+      } else if (strcmp(ucmd, "pwd") == 0) {  
         sprintf(cmd, "PWD");
         sendCmd(s, cmd, res);
 
-      } else if (strcmp(ucmd, "mkd") == 0) {   // <--- NUEVO COMANDO MKD
+      } else if (strcmp(ucmd, "mkd") == 0) {   
         arg = strtok(NULL, " ");
         if (!arg) { printf("Falta nombre de directorio.\n"); continue; }
         sprintf(cmd, "MKD %s", arg);
         sendCmd(s, cmd, res);
 
-      } else if (strcmp(ucmd, "dele") == 0) {  // <--- NUEVO COMANDO DELE
+      } else if (strcmp(ucmd, "dele") == 0) {  
         arg = strtok(NULL, " ");
         if (!arg) { printf("Falta nombre de archivo.\n"); continue; }
         sprintf(cmd, "DELE %s", arg);
