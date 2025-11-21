@@ -1,20 +1,13 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -O2
-OBJS = ZunigaJ-clienteFTP.o connectsock.o errexit.o
 
-all: clienteftp
+all: clienteFTP
 
-clienteftp: $(OBJS)
-	$(CC) $(CFLAGS) -o clienteftp $(OBJS)
+clienteFTP: CoronadoL-clienteFTP.o
+	$(CC) $(CFLAGS) -o clienteFTP CoronadoL-clienteFTP.o
 
-ZunigaJ-clienteFTP.o: ZunigaJ-clienteFTP.c connectsock.h errexit.h
-	$(CC) $(CFLAGS) -c ZunigaJ-clienteFTP.c
-
-connectsock.o: connectsock.c connectsock.h
-	$(CC) $(CFLAGS) -c connectsock.c
-
-errexit.o: errexit.c errexit.h
-	$(CC) $(CFLAGS) -c errexit.c
+CoronadoL-clienteFTP.o: CoronadoL-clienteFTP.c
+	$(CC) $(CFLAGS) -c CoronadoL-clienteFTP.c
 
 clean:
-	rm -f *.o clienteftp
+	rm -f *.o clienteFTP
